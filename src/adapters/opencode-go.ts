@@ -47,43 +47,61 @@ export function normalizeOpenCodeGoAdditionalTools(body: unknown): unknown {
   if (!Array.isArray(record.input)) return body;
   const existing = Array.isArray(record.tools) ? (record.tools as unknown[]) : [];
   const seen = new Set<string>();
+  // Claim a child declaration; returns false for duplicates and unidentifiable
+  // entries. Claiming inside the filter (rather than after it) keeps two equal
+  // children of the same container from both surviving.
+  const claim = (child: unknown): boolean => {
+    const key = toolIdentityKey(child);
+    if (key === undefined || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
   const markSeen = (tool: unknown): void => {
     if (!isRecord(tool)) return;
     if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
-      for (const child of tool.tools) markSeen(child);
+      for (const child of tool.tools) claim(child);
       return;
     }
-    const key = toolIdentityKey(tool);
-    if (key !== undefined) seen.add(key);
+    claim(tool);
   };
-  for (const tool of existing) markSeen(tool);
-  const promoted: unknown[] = [];
-  const promotedGroups = new Map<string, Record<string, unknown>>();
+  // Output buckets: top-level declarations, with at most one container per
+  // namespace name. Existing containers are copied before merging so the
+  // caller's declarations are never mutated.
+  const outTools: unknown[] = [];
+  const groupSlot = new Map<string, number>();
+  for (const tool of existing) {
+    if (isRecord(tool) && tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
+      for (const child of tool.tools as unknown[]) claim(child);
+      groupSlot.set(tool.name, outTools.length);
+    } else {
+      claim(tool);
+    }
+    outTools.push(tool);
+  }
+  const mergeGroup = (name: string, first: Record<string, unknown>, kept: unknown[]): void => {
+    const slot = groupSlot.get(name);
+    if (slot === undefined) {
+      const group = { ...first, tools: [] as unknown[] };
+      groupSlot.set(name, outTools.length);
+      outTools.push(group);
+      (group.tools as unknown[]).push(...kept);
+      return;
+    }
+    const current = outTools[slot] as Record<string, unknown>;
+    outTools[slot] = { ...current, tools: [...(current.tools as unknown[]), ...kept] };
+  };
   const promote = (tool: unknown): unknown | undefined => {
     if (!isRecord(tool)) return undefined;
     // Merge matching namespace containers so distinct children from multiple
-    // additional_tools items land in a single container instead of several
-    // same-named groups downstream.
+    // additional_tools items (and pre-existing top-level containers) land in a
+    // single container instead of several same-named groups downstream.
     if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
-      const kept = (tool.tools as unknown[]).filter(child => {
-        const key = toolIdentityKey(child);
-        return key !== undefined && !seen.has(key);
-      });
-      for (const child of kept) markSeen(child);
+      const kept = (tool.tools as unknown[]).filter(child => claim(child));
       if (kept.length === 0) return undefined;
-      let group = promotedGroups.get(tool.name);
-      if (!group) {
-        group = { ...tool, tools: [] as unknown[] };
-        promotedGroups.set(tool.name, group);
-        promoted.push(group);
-      }
-      (group.tools as unknown[]).push(...kept);
+      mergeGroup(tool.name, tool, kept);
       return undefined;
     }
-    const key = toolIdentityKey(tool);
-    if (key === undefined || seen.has(key)) return undefined;
-    seen.add(key);
-    return tool;
+    return claim(tool) ? tool : undefined;
   };
   let changed = false;
   const input: unknown[] = [];
@@ -100,11 +118,11 @@ export function normalizeOpenCodeGoAdditionalTools(body: unknown): unknown {
     // promoting them would only add a guaranteed-400 entry on a closed validator.
     for (const tool of item.tools as unknown[]) {
       const next = promote(tool);
-      if (next !== undefined) promoted.push(next);
+      if (next !== undefined) outTools.push(next);
     }
   }
   if (!changed) return body;
-  return { ...record, input, tools: [...existing, ...promoted] };
+  return { ...record, input, tools: outTools };
 }
 
 /** Public Responses rejects Codex's private agent_message variant, even with plaintext content. */

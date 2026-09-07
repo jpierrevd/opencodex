@@ -144,6 +144,36 @@ test("matching namespace containers merge across additional_tools items", () => 
   ]);
 });
 
+test("duplicate children inside one container survive once", () => {
+  const raw = { input: [{ type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [
+    { type: "custom", name: "exec", description: "run" },
+    { type: "custom", name: "exec", description: "run" },
+  ] }] }] };
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as { input: unknown[]; tools: unknown[] };
+  expect(result.tools).toEqual([
+    { type: "namespace", name: "functions", tools: [{ type: "custom", name: "exec", description: "run" }] },
+  ]);
+});
+
+test("item containers merge into pre-existing top-level containers", () => {
+  const raw = {
+    tools: [{ type: "namespace", name: "functions", tools: [{ type: "custom", name: "exec", description: "run" }] }],
+    input: [{ type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [
+      { type: "custom", name: "apply_patch", description: "patch" },
+    ] }] }],
+  };
+  const original = structuredClone(raw);
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as typeof raw & { tools: unknown[] };
+  expect(result.tools).toEqual([
+    { type: "namespace", name: "functions", tools: [
+      { type: "custom", name: "exec", description: "run" },
+      { type: "custom", name: "apply_patch", description: "patch" },
+    ] },
+  ]);
+  expect(result.input).toEqual([]);
+  expect(raw).toEqual(original);
+});
+
 test("image parts stay intact beside the assignment", () => {
   const image = { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" };
   const raw = { input: [{ type: "agent_message", content: [{ type: "input_text", text: "Inspect image" }, image] }] };
