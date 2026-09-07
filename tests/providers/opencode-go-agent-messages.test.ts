@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
-import { isOpenCodeGo, normalizeOpenCodeGoAgentMessages } from "../../src/adapters/opencode-go";
+import { isOpenCodeGo, normalizeOpenCodeGoAdditionalTools, normalizeOpenCodeGoAgentMessages } from "../../src/adapters/opencode-go";
 import { parseRequest } from "../../src/responses/parser";
 import { routeModel } from "../../src/router";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -28,6 +28,62 @@ test("ciphertext and unknown content are never reclassified as plaintext", () =>
     const raw = { input: [{ type: "agent_message", content: [part] }] };
     expect(normalizeOpenCodeGoAgentMessages(raw)).toBe(raw);
   }
+});
+
+test("mixed plaintext and inter-agent ciphertext converts carrying only plaintext", () => {
+  const text = { type: "input_text", text: "Message Type: NEW_TASK\nPayload" };
+  const raw = { input: [{ type: "agent_message", id: "amsg_mixed", author: "/root", recipient: "/root/worker", content: [text, { type: "encrypted_content" }] }] };
+  const original = structuredClone(raw);
+  const result = normalizeOpenCodeGoAgentMessages(raw) as typeof raw;
+  expect(result).not.toBe(raw);
+  expect(result.input[0]!.type).toBe("message");
+  expect(result.input[0]!.role).toBe("user");
+  expect(result.input[0]!.content[0].text).toContain('\"author\":\"/root\"');
+  expect(result.input[0]!.content[1]).toBe(text);
+  expect(result.input[0]!.content).toHaveLength(2);
+  expect(raw).toEqual(original);
+});
+
+test("mixed image, text and unknown parts keep only wire-safe parts", () => {
+  const image = { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" };
+  const text = { type: "input_text", text: "Inspect image" };
+  const raw = { input: [{ type: "agent_message", content: [text, image, { type: "future_type", text: "opaque" }] }] };
+  const result = normalizeOpenCodeGoAgentMessages(raw) as typeof raw;
+  expect(result.input[0]!.type).toBe("message");
+  expect(result.input[0]!.content).toEqual([text, image]);
+});
+
+test("additional_tools items promote to top-level tools and leave input", () => {
+  const exec = { type: "custom", name: "exec", description: "run" };
+  const group = { type: "namespace", name: "functions", tools: [exec] };
+  const raw = { input: [
+    { type: "additional_tools", id: "at_1", role: "developer", tools: [group] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+  ] };
+  const original = structuredClone(raw);
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as typeof raw & { tools: unknown[] };
+  expect(result).not.toBe(raw);
+  expect(result.input.map((i: { type: string }) => i.type)).toEqual(["message"]);
+  expect(result.tools).toEqual([group]);
+  expect(raw).toEqual(original);
+});
+
+test("additional_tools merge dedupes against existing top-level tools", () => {
+  const exec = { type: "custom", name: "exec", description: "run" };
+  const raw = {
+    tools: [{ type: "custom", name: "exec", description: "run" }],
+    input: [{ type: "additional_tools", tools: [exec, { type: "function", name: "search" }] }],
+  };
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as typeof raw & { tools: unknown[] };
+  expect(result.tools).toHaveLength(2);
+  expect(result.tools[1]).toEqual({ type: "function", name: "search" });
+  expect(result.input).toEqual([]);
+});
+
+test("bodies without additional_tools items keep their reference", () => {
+  const raw = { input: [{ type: "message", role: "user", content: [] }] };
+  expect(normalizeOpenCodeGoAdditionalTools(raw)).toBe(raw);
+  expect(normalizeOpenCodeGoAdditionalTools(null)).toBe(null);
 });
 
 test("image parts stay intact beside the assignment", () => {
@@ -155,12 +211,6 @@ test("Go conversion preserves file payloads beside text without mutating raw rep
 
 for (const { name, content } of [
   { name: "empty content", content: [] },
-  { name: "text mixed with an unknown part", content: [
-    { type: "input_text", text: "Known prefix" }, { type: "future_type", text: "Do not lose this" },
-  ] },
-  { name: "text mixed with ciphertext", content: [
-    { type: "input_text", text: "Routing header" }, { type: "encrypted_content", encrypted_content: "opaque" },
-  ] },
 ]) test(`Go preserves ${name} without partially converting it`, async () => {
   const raw = { ...body(), input: [{ ...body().input[0]!, content }] };
   const original = structuredClone(raw);
@@ -172,6 +222,33 @@ for (const { name, content } of [
       headers: new Headers(), translatorBudget: budget,
     });
     expect(JSON.parse(request.body as string).input[0]).toMatchObject({ type: "agent_message", content });
+    expect(parsed._rawBody).toBe(raw);
+    expect(raw).toEqual(original);
+  } finally {
+    budget.dispose();
+  }
+});
+
+for (const { name, content, surviving } of [
+  { name: "text mixed with an unknown part", content: [
+    { type: "input_text", text: "Known prefix" }, { type: "future_type", text: "Do not lose this" },
+  ], surviving: [{ type: "input_text", text: "Known prefix" }] },
+  { name: "text mixed with ciphertext", content: [
+    { type: "input_text", text: "Routing header" }, { type: "encrypted_content", encrypted_content: "opaque" },
+  ], surviving: [{ type: "input_text", text: "Routing header" }] },
+]) test(`Go converts ${name} carrying only wire-safe parts`, async () => {
+  const raw = { ...body(), input: [{ ...body().input[0]!, content }] };
+  const original = structuredClone(raw);
+  const parsed = parseRequest(raw);
+  const budget = createTranslatorBudget();
+  try {
+    const request = await createResponsesPassthroughAdapter(base).buildRequest(parsed, {
+      headers: new Headers(), translatorBudget: budget,
+    });
+    const sent = JSON.parse(request.body as string).input[0];
+    expect(sent.type).toBe("message");
+    expect(sent.role).toBe("user");
+    expect(sent.content.slice(1)).toEqual(surviving);
     expect(parsed._rawBody).toBe(raw);
     expect(raw).toEqual(original);
   } finally {

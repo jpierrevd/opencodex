@@ -68,7 +68,7 @@ describe("OpenCode Go Grok 4.6 Responses compatibility", () => {
     expect(body.tools).toEqual([functionTool]);
   });
 
-  test("drops hosted search from an additional_tools-only request", () => {
+  test("promotes additional_tools-only declarations and drops the rejected item", () => {
     const functionTool = { type: "function", name: "lookup", parameters: { type: "object" } };
     const body = build("grok-4.6", {
       input: [{
@@ -77,7 +77,8 @@ describe("OpenCode Go Grok 4.6 Responses compatibility", () => {
       }],
     });
 
-    expect(body.input).toEqual([{ type: "additional_tools", tools: [functionTool] }]);
+    expect(body.tools).toEqual([functionTool]);
+    expect(body.input).toEqual([]);
   });
 
   test("disables an explicit choice for a removed hosted tool", () => {
