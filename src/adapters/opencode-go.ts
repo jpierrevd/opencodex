@@ -1,3 +1,9 @@
+import { customToolWireName } from "../responses/custom-tool-compat";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 /** Match the Go destination, including user-renamed provider entries. */
 export function isOpenCodeGo(baseUrl: string): boolean {
   try {
@@ -18,7 +24,10 @@ function toolIdentityKey(tool: unknown): string | undefined {
   if (!tool || typeof tool !== "object" || Array.isArray(tool)) return undefined;
   const rec = tool as { type?: unknown; name?: unknown; namespace?: unknown };
   if (typeof rec.type !== "string" || typeof rec.name !== "string") return undefined;
-  return `${rec.type}\n${typeof rec.namespace === "string" ? rec.namespace : ""}\n${rec.name}`;
+  // Compare by wire identity so a flat declaration and the same tool inside the
+  // builtin `functions` namespace group dedupe instead of doubling upstream,
+  // where duplicate function names are rejected.
+  return `${rec.type}\n${customToolWireName(typeof rec.namespace === "string" ? rec.namespace : undefined, rec.name)}`;
 }
 
 /**
@@ -26,8 +35,9 @@ function toolIdentityKey(tool: unknown): string | undefined {
  * `tools` and drop the items. The parser already collects these declarations into the
  * tool surface, but the outbound body keeps the item verbatim and Console Go's validator
  * rejects the unknown item type (`input[N] did not match any supported type`). Promoting
- * preserves every declaration (deduplicated by type/namespace/name) in the standard shape
- * the downstream namespace/custom lowering passes already handle.
+ * preserves every declaration (deduplicated by wire identity, descending into namespace
+ * groups so a flat declaration and the same tool inside a group do not double upstream)
+ * in the standard shape the downstream namespace/custom lowering passes already handle.
  */
 export function normalizeOpenCodeGoAdditionalTools(body: unknown): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
@@ -35,27 +45,48 @@ export function normalizeOpenCodeGoAdditionalTools(body: unknown): unknown {
   if (!Array.isArray(record.input)) return body;
   const existing = Array.isArray(record.tools) ? (record.tools as unknown[]) : [];
   const seen = new Set<string>();
-  for (const tool of existing) {
+  const markSeen = (tool: unknown): void => {
+    if (!isRecord(tool)) return;
+    if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
+      for (const child of tool.tools) markSeen(child);
+      return;
+    }
     const key = toolIdentityKey(tool);
     if (key !== undefined) seen.add(key);
-  }
+  };
+  for (const tool of existing) markSeen(tool);
+  const promote = (tool: unknown): unknown | undefined => {
+    if (!isRecord(tool)) return undefined;
+    if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
+      const kept = tool.tools.filter(child => {
+        const key = toolIdentityKey(child);
+        return key !== undefined && !seen.has(key);
+      });
+      for (const child of kept) markSeen(child);
+      return kept.length > 0 ? { ...tool, tools: kept } : undefined;
+    }
+    const key = toolIdentityKey(tool);
+    if (key === undefined || seen.has(key)) return undefined;
+    seen.add(key);
+    return tool;
+  };
   const promoted: unknown[] = [];
   let changed = false;
   const input: unknown[] = [];
   for (const item of record.input as unknown[]) {
-    if (!item || typeof item !== "object" || Array.isArray(item)
-      || (item as { type?: unknown }).type !== "additional_tools"
-      || !Array.isArray((item as { tools?: unknown }).tools)) {
+    if (!isRecord(item)
+      || item.type !== "additional_tools"
+      || !Array.isArray(item.tools)) {
       input.push(item);
       continue;
     }
     changed = true;
-    for (const tool of (item as { tools: unknown[] }).tools) {
-      const key = toolIdentityKey(tool);
-      if (key === undefined || !seen.has(key)) {
-        if (key !== undefined) seen.add(key);
-        promoted.push(tool);
-      }
+    // Entries without a type/name identity cannot be matched by any downstream
+    // pass (namespace/custom lowering and tool_choice filtering all key on them);
+    // promoting them would only add a guaranteed-400 entry on a closed validator.
+    for (const tool of item.tools as unknown[]) {
+      const next = promote(tool);
+      if (next !== undefined) promoted.push(next);
     }
   }
   if (!changed) return body;

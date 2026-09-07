@@ -21,7 +21,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function customToolWireName(namespace: string | undefined, name: string): string {
+export function customToolWireName(namespace: string | undefined, name: string): string {
   return namespace === BUILTIN_FUNCTIONS_NAMESPACE ? name : namespacedToolName(namespace, name);
 }
 

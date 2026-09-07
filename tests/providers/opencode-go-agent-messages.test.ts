@@ -86,6 +86,42 @@ test("bodies without additional_tools items keep their reference", () => {
   expect(normalizeOpenCodeGoAdditionalTools(null)).toBe(null);
 });
 
+test("malformed entries without type/name are skipped, not promoted", () => {
+  const raw = { input: [{ type: "additional_tools", tools: [{ name: "x" }, "nope", 42, null] as unknown[] }] };
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as { input: unknown[]; tools: unknown[] };
+  expect(result.input).toEqual([]);
+  expect(result.tools).toEqual([]);
+});
+
+test("flat and builtin-namespaced duplicates promote once", () => {
+  const flat = { type: "custom", name: "exec", description: "run" };
+  const grouped = { type: "namespace", name: "functions", tools: [{ type: "custom", name: "exec", description: "run" }] };
+  const raw = {
+    tools: [flat],
+    input: [{ type: "additional_tools", tools: [grouped] }],
+  };
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as typeof raw & { tools: unknown[] };
+  expect(result.tools).toEqual([flat]);
+  expect(result.input).toEqual([]);
+});
+
+test("namespace groups keep only unseen children", () => {
+  const grouped = { type: "namespace", name: "functions", tools: [
+    { type: "custom", name: "exec", description: "run" },
+    { type: "custom", name: "apply_patch", description: "patch" },
+  ] };
+  const raw = {
+    tools: [{ type: "custom", name: "exec", description: "run" }],
+    input: [{ type: "additional_tools", tools: [grouped] }],
+  };
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as typeof raw & { tools: unknown[] };
+  expect(result.tools).toEqual([
+    { type: "custom", name: "exec", description: "run" },
+    { type: "namespace", name: "functions", tools: [{ type: "custom", name: "apply_patch", description: "patch" }] },
+  ]);
+  expect(result.input).toEqual([]);
+});
+
 test("image parts stay intact beside the assignment", () => {
   const image = { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" };
   const raw = { input: [{ type: "agent_message", content: [{ type: "input_text", text: "Inspect image" }, image] }] };
