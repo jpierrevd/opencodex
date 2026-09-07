@@ -1616,6 +1616,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Zen Go can close a Chat stream after a fully assembled function call without sending
     // finish_reason or [DONE] (#2260). The adapter still rejects incomplete argument JSON.
     openaiChatEofTolerance: true,
+    // Console Go rejects replayed reasoning.encrypted_content combined with
+    // previous_response_id ("reasoning.encrypted_content cannot be used with
+    // previous_response_id"), so chained tool turns must go out stateless:
+    // full explicit history, no server-side continuation. Verified live
+    // (chained 400 without, 200 with).
+    statelessResponses: true,
     /* [Decision Log]
     - 목적과 의도: Route the exact models OpenCode Go documents on the Responses endpoint — GPT 5.6 Luna, Grok 4.6, and Muse Spark Contributor (#2617).
     - 기존 구현 및 제약 조건: The provider is mixed-wire but its provider-wide `openai-chat` adapter sent Luna to `/chat/completions`; explicit user `modelAdapters` entries must remain authoritative.

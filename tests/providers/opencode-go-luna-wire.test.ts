@@ -19,6 +19,12 @@ function opencodeGo(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConf
   return { ...providerConfigSeed(entry), apiKey: "test-key", ...overrides };
 }
 
+describe("OpenCode Go stateless Responses", () => {
+  test("registry seeds stateless chained turns (no previous_response_id upstream)", () => {
+    expect(providerConfigSeed(getProviderRegistryEntry("opencode-go")!).statelessResponses).toBe(true);
+  });
+});
+
 describe("OpenCode Go GPT 5.6 Luna wire selection (#1482)", () => {
   test("uses Responses from every inbound surface", () => {
     for (const inbound of ["responses", "chat", "anthropic"] as const) {
