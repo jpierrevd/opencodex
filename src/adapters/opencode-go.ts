@@ -15,11 +15,13 @@ export function isOpenCodeGo(baseUrl: string): boolean {
 /** Plaintext part types Console Go accepts inside a converted message. */
 const GO_PLAINTEXT_PART_TYPES = ["input_text", "input_image", "input_file"];
 
+/** Wire-safe content part check for Console Go message conversion. */
 function isGoPlaintextPart(part: unknown): boolean {
   return !!part && typeof part === "object" && !Array.isArray(part)
     && GO_PLAINTEXT_PART_TYPES.includes((part as { type?: unknown }).type as string);
 }
 
+/** Dedupe identity for promoted declarations: type plus wire name (namespace-aware). */
 function toolIdentityKey(tool: unknown): string | undefined {
   if (!tool || typeof tool !== "object" || Array.isArray(tool)) return undefined;
   const rec = tool as { type?: unknown; name?: unknown; namespace?: unknown };

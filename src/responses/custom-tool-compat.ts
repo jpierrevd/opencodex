@@ -21,6 +21,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Wire name for a routed custom tool: the builtin functions namespace collapses to the bare name. */
 export function customToolWireName(namespace: string | undefined, name: string): string {
   return namespace === BUILTIN_FUNCTIONS_NAMESPACE ? name : namespacedToolName(namespace, name);
 }
