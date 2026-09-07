@@ -122,6 +122,28 @@ test("namespace groups keep only unseen children", () => {
   expect(result.input).toEqual([]);
 });
 
+test("matching namespace containers merge across additional_tools items", () => {
+  const raw = {
+    input: [
+      { type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [
+        { type: "custom", name: "exec", description: "run" },
+      ] }] },
+      { type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [
+        { type: "custom", name: "exec", description: "run" },
+        { type: "custom", name: "apply_patch", description: "patch" },
+      ] }] },
+    ],
+  };
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as { input: unknown[]; tools: unknown[] };
+  expect(result.input).toEqual([]);
+  expect(result.tools).toEqual([
+    { type: "namespace", name: "functions", tools: [
+      { type: "custom", name: "exec", description: "run" },
+      { type: "custom", name: "apply_patch", description: "patch" },
+    ] },
+  ]);
+});
+
 test("image parts stay intact beside the assignment", () => {
   const image = { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" };
   const raw = { input: [{ type: "agent_message", content: [{ type: "input_text", text: "Inspect image" }, image] }] };

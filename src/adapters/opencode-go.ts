@@ -57,22 +57,34 @@ export function normalizeOpenCodeGoAdditionalTools(body: unknown): unknown {
     if (key !== undefined) seen.add(key);
   };
   for (const tool of existing) markSeen(tool);
+  const promoted: unknown[] = [];
+  const promotedGroups = new Map<string, Record<string, unknown>>();
   const promote = (tool: unknown): unknown | undefined => {
     if (!isRecord(tool)) return undefined;
+    // Merge matching namespace containers so distinct children from multiple
+    // additional_tools items land in a single container instead of several
+    // same-named groups downstream.
     if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
-      const kept = tool.tools.filter(child => {
+      const kept = (tool.tools as unknown[]).filter(child => {
         const key = toolIdentityKey(child);
         return key !== undefined && !seen.has(key);
       });
       for (const child of kept) markSeen(child);
-      return kept.length > 0 ? { ...tool, tools: kept } : undefined;
+      if (kept.length === 0) return undefined;
+      let group = promotedGroups.get(tool.name);
+      if (!group) {
+        group = { ...tool, tools: [] as unknown[] };
+        promotedGroups.set(tool.name, group);
+        promoted.push(group);
+      }
+      (group.tools as unknown[]).push(...kept);
+      return undefined;
     }
     const key = toolIdentityKey(tool);
     if (key === undefined || seen.has(key)) return undefined;
     seen.add(key);
     return tool;
   };
-  const promoted: unknown[] = [];
   let changed = false;
   const input: unknown[] = [];
   for (const item of record.input as unknown[]) {
