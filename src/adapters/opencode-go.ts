@@ -56,28 +56,11 @@ export function normalizeOpenCodeGoAdditionalTools(body: unknown): unknown {
     seen.add(key);
     return true;
   };
-  const markSeen = (tool: unknown): void => {
-    if (!isRecord(tool)) return;
-    if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
-      for (const child of tool.tools) claim(child);
-      return;
-    }
-    claim(tool);
-  };
   // Output buckets: top-level declarations, with at most one container per
   // namespace name. Existing containers are copied before merging so the
   // caller's declarations are never mutated.
   const outTools: unknown[] = [];
   const groupSlot = new Map<string, number>();
-  for (const tool of existing) {
-    if (isRecord(tool) && tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
-      for (const child of tool.tools as unknown[]) claim(child);
-      groupSlot.set(tool.name, outTools.length);
-    } else {
-      claim(tool);
-    }
-    outTools.push(tool);
-  }
   const mergeGroup = (name: string, first: Record<string, unknown>, kept: unknown[]): void => {
     const slot = groupSlot.get(name);
     if (slot === undefined) {
@@ -90,19 +73,22 @@ export function normalizeOpenCodeGoAdditionalTools(body: unknown): unknown {
     const current = outTools[slot] as Record<string, unknown>;
     outTools[slot] = { ...current, tools: [...(current.tools as unknown[]), ...kept] };
   };
-  const promote = (tool: unknown): unknown | undefined => {
-    if (!isRecord(tool)) return undefined;
-    // Merge matching namespace containers so distinct children from multiple
-    // additional_tools items (and pre-existing top-level containers) land in a
-    // single container instead of several same-named groups downstream.
+  let dropped = false;
+  // Normalize one declaration into the output buckets, dropping duplicates and
+  // unidentifiable entries. Used for pre-existing top-level tools and promoted
+  // item tools alike so both paths share one invariant.
+  const ingest = (tool: unknown): void => {
+    if (!isRecord(tool)) { dropped = true; return; }
     if (tool.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
       const kept = (tool.tools as unknown[]).filter(child => claim(child));
-      if (kept.length === 0) return undefined;
+      if (kept.length === 0) { dropped = true; return; }
       mergeGroup(tool.name, tool, kept);
-      return undefined;
+      return;
     }
-    return claim(tool) ? tool : undefined;
+    if (!claim(tool)) { dropped = true; return; }
+    outTools.push(tool);
   };
+  for (const tool of existing) ingest(tool);
   let changed = false;
   const input: unknown[] = [];
   for (const item of record.input as unknown[]) {
@@ -116,12 +102,9 @@ export function normalizeOpenCodeGoAdditionalTools(body: unknown): unknown {
     // Entries without a type/name identity cannot be matched by any downstream
     // pass (namespace/custom lowering and tool_choice filtering all key on them);
     // promoting them would only add a guaranteed-400 entry on a closed validator.
-    for (const tool of item.tools as unknown[]) {
-      const next = promote(tool);
-      if (next !== undefined) outTools.push(next);
-    }
+    for (const tool of item.tools as unknown[]) ingest(tool);
   }
-  if (!changed) return body;
+  if (!changed && !dropped) return body;
   return { ...record, input, tools: outTools };
 }
 

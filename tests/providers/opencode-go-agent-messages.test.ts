@@ -86,6 +86,18 @@ test("bodies without additional_tools items keep their reference", () => {
   expect(normalizeOpenCodeGoAdditionalTools(null)).toBe(null);
 });
 
+test("pre-existing top-level duplicates collapse without items", () => {
+  const exec = { type: "custom", name: "exec", description: "run" };
+  const raw = {
+    tools: [exec, { type: "custom", name: "exec", description: "run" }],
+    input: [{ type: "message", role: "user", content: [] }],
+  };
+  const result = normalizeOpenCodeGoAdditionalTools(raw) as typeof raw & { tools: unknown[] };
+  expect(result).not.toBe(raw);
+  expect(result.tools).toEqual([exec]);
+  expect(result.input).toEqual(raw.input);
+});
+
 test("malformed entries without type/name are skipped, not promoted", () => {
   const raw = { input: [{ type: "additional_tools", tools: [{ name: "x" }, "nope", 42, null] as unknown[] }] };
   const result = normalizeOpenCodeGoAdditionalTools(raw) as { input: unknown[]; tools: unknown[] };
